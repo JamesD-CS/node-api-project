@@ -2,7 +2,7 @@ import * as dotenv from 'dotenv'
 dotenv.config()
 import express, {Request, Response} from 'express';
 import cors from "cors";
-import {db_driver} from "./db_driver"
+import {db_driver} from "./db_driver2"
 import * as jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
 import mysql from 'mysql2';
@@ -12,6 +12,14 @@ const app = express();
 const port = process.env.PORT || 9000;
 const DB = new db_driver();
 const salt_rounds = 10;
+
+type Order={
+      items:string[] 
+      order_total:number 
+      email:string 
+      order_status:string 
+      order_date:string 
+}
 
 app.use(cors());
 app.use(express.json());
@@ -63,7 +71,8 @@ function generateAccessToken(user_email:string, user_name:string):string {
 async function user_lookup(email: string, password: string){
 
     //find user in db
-    let user_result = await DB.Find_user(email) as mysql.RowDataPacket;
+    let user_result = await DB.find_user_test(email) as mysql.RowDataPacket;
+
     console.log("express user lookup function", user_result.length);
     //if user exists compare hashed pass with user provided pass
     let new_jwt:string = "";
@@ -85,46 +94,33 @@ async function user_lookup(email: string, password: string){
       return [new_jwt, user_name];
   };
 
-app.get('/', async (req: Request, res: Response, next) => {
-  try {
-    const query_result = await DB.Select_DB();
-
-    res.send(query_result);
-
-  } catch (error) {
-    next(error); // Pass the error to express error handler
-  }
-});
-
-
-
-app.post('/register_user', async (req: Request, res: Response, next) => {
-       let first_name:string = req.body.first_name;
-       let last_name:string = req.body.last_name;
-       let email:string = req.body.email;
-       let phone:string = req.body.phone;
-       let plaintext_pass:string = req.body.user_pass;
-       let hashed_pass:string = await(bcrypt.hash(plaintext_pass,salt_rounds));
+app.post('/register_user_test', async (req: Request, res: Response, next) => {
+  let first_name:string = req.body.first_name;
+  let last_name:string = req.body.last_name;
+  let email:string = req.body.email;
+  let phone:string = req.body.phone;
+  let plaintext_pass:string = req.body.user_pass;
+  let hashed_pass:string = await(bcrypt.hash(plaintext_pass,salt_rounds));
+  
+try {
+           const query_result = await DB.insert_user_db_test(
+             first_name, 
+             last_name, 
+             email,
+             phone,
+             hashed_pass);
        
-  try {
-                const query_result = await DB.Insert_user_DB(
-                  first_name, 
-                  last_name, 
-                  email,
-                  phone,
-                  hashed_pass);
-            
-        res.status(201).json({message: "Successfully Registered", status: 201})
+   res.status(201).json({message: "Successfully Registered", status: 201})
 
-      } catch (error: unknown) {
-        /*
-        code: 'ER_DUP_ENTRY',
-        errno: 1062,
+ } catch (error: unknown) {
+   /*
+   code: 'ER_DUP_ENTRY',
+   errno: 1062,
 
-        */
-      
-        next(error); // Pass the error to express error handler
-        }
+   */
+ 
+   next(error); // Pass the error to express error handler
+   }
 
 });
 
@@ -187,7 +183,8 @@ app.get('/user',  (req:Request, res:Response, next) =>{
 
 app.get('/items', async (req: Request, res: Response, next) => {
   try {
-    const query_result = await DB.Get_items();
+    //const query_result = await DB.Get_items();
+    const query_result = await DB.get_all_items();
     
     res.send(JSON.stringify(query_result));
 
@@ -198,19 +195,11 @@ app.get('/items', async (req: Request, res: Response, next) => {
 });
 
 
-//access request params test
-app.get('/:id', function (req, res) {
-    console.log(req.params['id']);
-    res.send();
-});
-
 app.post('/order', async (req: Request, res: Response, next) => {
-  console.log('express get order function');
   if (!req.headers.authorization){
     res.sendStatus(401);
     }else
       {
-      //let token:string = req.body.token;
       let token:string|undefined = req.headers.authorization as string;
       //console.log("express order function token is:", token);
       let decodedToken = verifyToken(token as string) as jwt.JwtPayload;
@@ -226,14 +215,9 @@ app.post('/order', async (req: Request, res: Response, next) => {
         //console.log(decodedToken.user_email) ;
         console.log(items);
         try {
-            DB.Add_order(
-            email, 
-            order_date, 
-            order_status,
-            order_total,
-            items);
-      
-        res.status(201).json({message: "Order Placed", status: 201})
+           
+            DB.add_new_order(email, order_date, order_status,order_total,items);
+            res.status(201).json({message: "Order Placed", status: 201})
 
         } catch (error: unknown) {
 
@@ -244,8 +228,16 @@ app.post('/order', async (req: Request, res: Response, next) => {
     
 });
 
-app.get('/get_order', async(req: Request, res:Response, next) => {
+app.get('/get_order/:order_id?', async(req: Request, res:Response, next) => {
   console.log('express get_order');
+  let order_id: number | undefined;
+  if (!req.params['order_id']){
+    console.log('express get_order no params');
+    order_id = undefined;
+  }else{
+    console.log('order_id param',req.params['order_id'],'typeof param', typeof req.params.order_id);
+    order_id = parseInt(req.params['order_id']);
+  }
   if (!req.headers.authorization){
     res.sendStatus(401);
     }
@@ -258,8 +250,27 @@ app.get('/get_order', async(req: Request, res:Response, next) => {
       }else{
         let email:string = decodedToken.user_email;
         try {
-          const get_all_orders = await DB.Get_orders(email);
-          res.send(JSON.stringify(get_all_orders));
+          console.log('getting order from db');
+          const get_all_orders = await DB.get_user_orders(email, order_id);
+          let order_array:Order[]=[];
+          if(get_all_orders){
+            let order_items = get_all_orders[1];
+            for(let n=0; n < get_all_orders[0].length; n++){
+              let send_order:Order={
+                email:get_all_orders[0][n]['email'],
+                order_date:get_all_orders[0][n]['order_date'],
+                items:order_items[n],
+                order_total:get_all_orders[0][n]['order_total'],
+                order_status:get_all_orders[0][n]['order_status'],
+
+              };
+              order_array.push(send_order);
+              //console.log('order',n, get_all_orders[0][n]['order_id']);
+              //console.log('items for order', n, order_items[n]);
+            }
+          }
+          res.send(JSON.stringify(order_array));
+          //res.sendStatus(200);
       
         } catch (error) {
           //console.log(error);
